@@ -221,6 +221,8 @@ func (c *crawlerState) processPage(ctx context.Context, job crawlJob) (PageRepor
 		URL:          job.url.String(),
 		Depth:        job.depth,
 		Status:       "ok",
+		BrokenLinks:  make([]BrokenLinkReport, 0),
+		Assets:       make([]AssetReport, 0),
 		DiscoveredAt: time.Now(),
 	}
 
@@ -254,8 +256,8 @@ func (c *crawlerState) processPage(ctx context.Context, job crawlJob) (PageRepor
 
 func (c *crawlerState) processLinks(ctx context.Context, current crawlJob, body []byte) ([]*url.URL, []BrokenLinkReport) {
 	rawLinks := extractLinks(body)
-	var discovered []*url.URL
-	var broken []BrokenLinkReport
+	discovered := make([]*url.URL, 0)
+	broken := make([]BrokenLinkReport, 0)
 
 	nextDepth := current.depth + 1
 	canFollow := nextDepth < c.opts.Depth
@@ -330,7 +332,7 @@ func (c *crawlerState) checkOneLink(ctx context.Context, link *url.URL) BrokenLi
 }
 
 func (c *crawlerState) processAssets(ctx context.Context, base *url.URL, candidates []assetCandidate) []AssetReport {
-	var result []AssetReport
+	result := make([]AssetReport, 0, len(candidates))
 	for _, asset := range candidates {
 		assetURL, err := resolveURL(base, asset.url)
 		if err != nil || !isHTTPScheme(assetURL) {
