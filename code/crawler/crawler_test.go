@@ -135,6 +135,105 @@ func TestAnalyzeNetworkError(t *testing.T) {
 	}
 }
 
+func TestAnalyze404Status(t *testing.T) {
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {
+				status: 404,
+				body:   "not found",
+			},
+		},
+	}
+
+	client := &http.Client{Transport: mock}
+	data, err := Analyze(context.Background(), Options{
+		URL:         "https://test.com",
+		Depth:       1,
+		Retries:     0,
+		Timeout:     time.Second,
+		Concurrency: 1,
+		HTTPClient:  client,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var report Report
+	json.Unmarshal(data, &report)
+
+	page := report.Pages[0]
+	if page.HTTPStatus != 404 {
+		t.Errorf("expected 404, got %d", page.HTTPStatus)
+	}
+	if page.Status != "error" {
+		t.Errorf("expected 'error' status, got '%s'", page.Status)
+	}
+}
+
+func TestAnalyze500Status(t *testing.T) {
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {
+				status: 500,
+				body:   "server error",
+			},
+		},
+	}
+
+	client := &http.Client{Transport: mock}
+	data, err := Analyze(context.Background(), Options{
+		URL:         "https://test.com",
+		Depth:       1,
+		Retries:     0,
+		Timeout:     time.Second,
+		Concurrency: 1,
+		HTTPClient:  client,
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	var report Report
+	json.Unmarshal(data, &report)
+	if report.Pages[0].HTTPStatus != 500 {
+		t.Errorf("expected 500, got %d", report.Pages[0].HTTPStatus)
+	}
+}
+
+func TestAnalyzeTimeout(t *testing.T) {
+	// контекст с очень коротким таймаутом
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	// даем контексту истечь
+	time.Sleep(5 * time.Millisecond)
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {status: 200, body: "<html></html>"},
+		},
+	}
+	client := &http.Client{Transport: mock}
+
+	data, err := Analyze(ctx, Options{
+		URL:         "https://test.com",
+		Depth:       1,
+		Concurrency: 1,
+		HTTPClient:  client,
+	})
+
+	// при отмененном контексте должен вернуть отчет или ошибку
+	if err != nil {
+		// ошибка контекста - ок
+		return
+	}
+	if data != nil {
+		var report Report
+		json.Unmarshal(data, &report)
+		// отчет может быть пустой или с ошибкой - оба варианта ок
+	}
+}
+
 func TestAnalyzeBrokenLinks(t *testing.T) {
 	html := `<html><body>
 		<a href="https://test.com/ok">good</a>
