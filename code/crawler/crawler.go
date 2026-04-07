@@ -137,7 +137,7 @@ func (c *crawlerState) execute(ctx context.Context) (*Report, error) {
 		GeneratedAt: time.Now(),
 	}
 
-	jobs := make(chan crawlJob)
+	jobs := make(chan crawlJob, 256)
 	var workerWg sync.WaitGroup
 	var taskWg sync.WaitGroup
 

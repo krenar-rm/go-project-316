@@ -437,3 +437,122 @@ func TestSEOHtmlEntities(t *testing.T) {
 		t.Errorf("description = %q, want %q", seo.Description, "<best> show & more")
 	}
 }
+
+func TestDepthLimitsPages(t *testing.T) {
+	// depth=1 значит только корневая страница (depth 0), без перехода по ссылкам
+	rootHTML := `<html><body>
+		<a href="https://test.com/page1">link</a>
+	</body></html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {status: 200, body: rootHTML, headers: http.Header{"Content-Type": {"text/html"}}},
+			"HEAD https://test.com/page1": {status: 200},
+			"GET https://test.com/page1":  {status: 200, body: "<html><body>page1</body></html>"},
+		},
+	}
+
+	client := &http.Client{Transport: mock}
+
+	// depth=1 -> только root
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: client,
+	})
+	var report Report
+	json.Unmarshal(data, &report)
+
+	if len(report.Pages) != 1 {
+		t.Fatalf("depth=1: expected 1 page, got %d", len(report.Pages))
+	}
+	if report.Pages[0].URL != "https://test.com" {
+		t.Errorf("expected root page, got %s", report.Pages[0].URL)
+	}
+
+	// depth=2 -> root + page1
+	data2, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 2, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: client,
+	})
+	var report2 Report
+	json.Unmarshal(data2, &report2)
+
+	if len(report2.Pages) != 2 {
+		t.Fatalf("depth=2: expected 2 pages, got %d", len(report2.Pages))
+	}
+}
+
+func TestExternalPagesNotCrawled(t *testing.T) {
+	rootHTML := `<html><body>
+		<a href="https://test.com/inner">internal</a>
+		<a href="https://external.com/page">external</a>
+	</body></html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com":        {status: 200, body: rootHTML, headers: http.Header{"Content-Type": {"text/html"}}},
+			"GET https://test.com/inner":  {status: 200, body: "<html><body>inner</body></html>", headers: http.Header{"Content-Type": {"text/html"}}},
+			"HEAD https://external.com/page": {status: 200},
+		},
+	}
+
+	client := &http.Client{Transport: mock}
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 3, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: client,
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+
+	for _, p := range report.Pages {
+		if p.URL == "https://external.com/page" {
+			t.Error("external page should not be in pages list")
+		}
+	}
+
+	// внутренняя должна быть
+	found := false
+	for _, p := range report.Pages {
+		if p.URL == "https://test.com/inner" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("internal page should be in pages list")
+	}
+}
+
+func TestDuplicateLinksOnlyOnce(t *testing.T) {
+	rootHTML := `<html><body>
+		<a href="https://test.com/page">first</a>
+		<a href="https://test.com/page">second</a>
+		<a href="https://test.com/page">third</a>
+	</body></html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com":       {status: 200, body: rootHTML, headers: http.Header{"Content-Type": {"text/html"}}},
+			"GET https://test.com/page":  {status: 200, body: "<html><body>ok</body></html>", headers: http.Header{"Content-Type": {"text/html"}}},
+		},
+	}
+
+	client := &http.Client{Transport: mock}
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 2, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: client,
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+
+	count := 0
+	for _, p := range report.Pages {
+		if p.URL == "https://test.com/page" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("page should appear once, got %d times", count)
+	}
+}
