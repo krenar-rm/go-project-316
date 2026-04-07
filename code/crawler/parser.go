@@ -146,6 +146,7 @@ func parseHTML(data []byte) (*goquery.Document, error) {
 	return goquery.NewDocumentFromReader(bytes.NewReader(data))
 }
 
+// isStylesheet checks if rel attribute contains "stylesheet" token
 func isStylesheet(rel string) bool {
 	rel = strings.ToLower(rel)
 	for _, part := range strings.FieldsFunc(rel, func(r rune) bool {
