@@ -329,3 +329,111 @@ func TestAnalyzeIgnoresUnsupportedSchemes(t *testing.T) {
 		t.Errorf("expected 0 broken links (unsupported schemes ignored), got %d: %+v", len(page.BrokenLinks), page.BrokenLinks)
 	}
 }
+
+func TestSEOAllTagsPresent(t *testing.T) {
+	html := `<html>
+	<head>
+		<title>My Page Title</title>
+		<meta name="description" content="Page about testing">
+	</head>
+	<body><h1>Welcome</h1></body>
+	</html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {status: 200, body: html, headers: http.Header{"Content-Type": {"text/html"}}},
+		},
+	}
+
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: &http.Client{Transport: mock},
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+	seo := report.Pages[0].SEO
+
+	if !seo.HasTitle {
+		t.Error("has_title should be true")
+	}
+	if seo.Title != "My Page Title" {
+		t.Errorf("title = %q, want %q", seo.Title, "My Page Title")
+	}
+	if !seo.HasDescription {
+		t.Error("has_description should be true")
+	}
+	if seo.Description != "Page about testing" {
+		t.Errorf("description = %q, want %q", seo.Description, "Page about testing")
+	}
+	if !seo.HasH1 {
+		t.Error("has_h1 should be true")
+	}
+}
+
+func TestSEONoTags(t *testing.T) {
+	html := `<html><head></head><body><p>just text</p></body></html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {status: 200, body: html, headers: http.Header{"Content-Type": {"text/html"}}},
+		},
+	}
+
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: &http.Client{Transport: mock},
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+	seo := report.Pages[0].SEO
+
+	if seo.HasTitle {
+		t.Error("has_title should be false")
+	}
+	if seo.Title != "" {
+		t.Errorf("title should be empty, got %q", seo.Title)
+	}
+	if seo.HasDescription {
+		t.Error("has_description should be false")
+	}
+	if seo.Description != "" {
+		t.Errorf("description should be empty, got %q", seo.Description)
+	}
+	if seo.HasH1 {
+		t.Error("has_h1 should be false")
+	}
+}
+
+func TestSEOHtmlEntities(t *testing.T) {
+	html := `<html>
+	<head>
+		<title>Tom &amp; Jerry</title>
+		<meta name="description" content="&lt;best&gt; show &amp; more">
+	</head>
+	<body><h1>test</h1></body>
+	</html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {status: 200, body: html, headers: http.Header{"Content-Type": {"text/html"}}},
+		},
+	}
+
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: &http.Client{Transport: mock},
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+	seo := report.Pages[0].SEO
+
+	if seo.Title != "Tom & Jerry" {
+		t.Errorf("title = %q, want %q", seo.Title, "Tom & Jerry")
+	}
+	if seo.Description != "<best> show & more" {
+		t.Errorf("description = %q, want %q", seo.Description, "<best> show & more")
+	}
+}
