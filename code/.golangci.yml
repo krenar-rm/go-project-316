@@ -1,0 +1,16 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+  disable:
+    - cyclop
+    - goconst
+  exclusions:
+    rules:
+      - path: ".*_test\\.go"
+        linters:
+          - errcheck
+          - goconst

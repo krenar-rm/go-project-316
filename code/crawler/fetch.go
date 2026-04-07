@@ -139,11 +139,14 @@ func shouldRetry(status int) bool {
 	return status == http.StatusTooManyRequests || status >= 500
 }
 
-func readBody(r io.ReadCloser) ([]byte, error) {
-	defer r.Close()
+func readBody(r io.ReadCloser) (data []byte, err error) {
+	defer func() {
+		if closeErr := r.Close(); closeErr != nil && err == nil {
+			err = closeErr
+		}
+	}()
 	var buf bytes.Buffer
-	_, err := buf.ReadFrom(r)
-	if err != nil {
+	if _, err = buf.ReadFrom(r); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
