@@ -280,4 +280,52 @@ func TestAnalyzeBrokenLinks(t *testing.T) {
 	if page.BrokenLinks[0].StatusCode != 404 {
 		t.Errorf("expected 404, got %d", page.BrokenLinks[0].StatusCode)
 	}
+	if page.BrokenLinks[0].URL != "https://test.com/bad" {
+		t.Errorf("wrong broken link url: %s", page.BrokenLinks[0].URL)
+	}
+}
+
+func TestAnalyzeIgnoresUnsupportedSchemes(t *testing.T) {
+	html := `<html><body>
+		<a href="mailto:test@example.com">email</a>
+		<a href="javascript:alert(1)">js</a>
+		<a href="tel:+123456">phone</a>
+		<a href="">empty</a>
+		<a href="#">anchor</a>
+		<a href="https://test.com/valid">valid</a>
+	</body></html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {
+				status:  200,
+				body:    html,
+				headers: http.Header{"Content-Type": []string{"text/html"}},
+			},
+			"HEAD https://test.com/valid": {
+				status: 200,
+			},
+		},
+	}
+
+	client := &http.Client{Transport: mock}
+	data, err := Analyze(context.Background(), Options{
+		URL:         "https://test.com",
+		Depth:       1,
+		Retries:     0,
+		Timeout:     time.Second,
+		Concurrency: 1,
+		HTTPClient:  client,
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	var report Report
+	json.Unmarshal(data, &report)
+
+	page := report.Pages[0]
+	if len(page.BrokenLinks) != 0 {
+		t.Errorf("expected 0 broken links (unsupported schemes ignored), got %d: %+v", len(page.BrokenLinks), page.BrokenLinks)
+	}
 }
