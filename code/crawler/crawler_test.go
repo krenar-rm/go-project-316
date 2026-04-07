@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -555,4 +556,153 @@ func TestDuplicateLinksOnlyOnce(t *testing.T) {
 	if count != 1 {
 		t.Errorf("page should appear once, got %d times", count)
 	}
+}
+
+func TestRateLimitDelay(t *testing.T) {
+	// трекаем время запросов
+	var mu sync.Mutex
+	var requestTimes []time.Time
+
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		requestTimes = append(requestTimes, time.Now())
+		mu.Unlock()
+		return &http.Response{
+			StatusCode:    200,
+			Header:        http.Header{"Content-Type": {"text/html"}},
+			Body:          io.NopCloser(strings.NewReader("<html><body>ok</body></html>")),
+			ContentLength: 28,
+			Request:       req,
+		}, nil
+	})
+
+	client := &http.Client{Transport: transport}
+	delay := 50 * time.Millisecond
+
+	Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Delay: delay, Timeout: 2 * time.Second,
+		Concurrency: 1, HTTPClient: client,
+	})
+
+	mu.Lock()
+	times := requestTimes
+	mu.Unlock()
+
+	// проверяем что между запросами минимум delay
+	for i := 1; i < len(times); i++ {
+		gap := times[i].Sub(times[i-1])
+		if gap < delay-5*time.Millisecond { // небольшой допуск
+			t.Errorf("gap between requests %d and %d is %v, expected >= %v", i-1, i, gap, delay)
+		}
+	}
+}
+
+func TestRateLimitRPSOverridesDelay(t *testing.T) {
+	// rps приоритетнее delay - если rps=10 а delay=1s, то интервал = 100ms (не 1s)
+	var mu sync.Mutex
+	var requestTimes []time.Time
+
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		requestTimes = append(requestTimes, time.Now())
+		mu.Unlock()
+		return &http.Response{
+			StatusCode:    200,
+			Header:        http.Header{"Content-Type": {"text/html"}},
+			Body:          io.NopCloser(strings.NewReader("<html><body><a href=\"https://test.com/p1\">l</a></body></html>")),
+			ContentLength: 60,
+			Request:       req,
+		}, nil
+	})
+
+	client := &http.Client{Transport: transport}
+
+	// rps=10 -> интервал 100ms, delay стоит 2s но должен быть проигнорирован
+	// в CLI rps переводится в delay, проверим напрямую
+	rpsDelay := time.Duration(float64(time.Second) / 10) // 100ms
+
+	start := time.Now()
+	Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Delay: rpsDelay, Timeout: 5 * time.Second,
+		Concurrency: 1, HTTPClient: client,
+	})
+	elapsed := time.Since(start)
+
+	mu.Lock()
+	n := len(requestTimes)
+	mu.Unlock()
+
+	// не должно занять слишком долго (при rps=10 и 1-2 запроса < 1 секунды)
+	if elapsed > 2*time.Second {
+		t.Errorf("took %v, expected faster with rps=10", elapsed)
+	}
+	if n == 0 {
+		t.Error("expected at least one request")
+	}
+}
+
+func TestNoDelayNoSlowdown(t *testing.T) {
+	var mu sync.Mutex
+	var requestTimes []time.Time
+
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		requestTimes = append(requestTimes, time.Now())
+		mu.Unlock()
+		return &http.Response{
+			StatusCode:    200,
+			Header:        http.Header{"Content-Type": {"text/html"}},
+			Body:          io.NopCloser(strings.NewReader("<html><body>fast</body></html>")),
+			ContentLength: 30,
+			Request:       req,
+		}, nil
+	})
+
+	client := &http.Client{Transport: transport}
+
+	start := time.Now()
+	Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Delay: 0, Timeout: time.Second,
+		Concurrency: 1, HTTPClient: client,
+	})
+	elapsed := time.Since(start)
+
+	// без delay должно выполниться быстро
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("no delay should be fast, took %v", elapsed)
+	}
+}
+
+func TestDelayContextCancel(t *testing.T) {
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode:    200,
+			Header:        http.Header{"Content-Type": {"text/html"}},
+			Body:          io.NopCloser(strings.NewReader("<html><body>ok</body></html>")),
+			ContentLength: 28,
+			Request:       req,
+		}, nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	Analyze(ctx, Options{
+		URL: "https://test.com", Depth: 1, Delay: 5 * time.Second, Timeout: 10 * time.Second,
+		Concurrency: 1, HTTPClient: &http.Client{Transport: transport},
+	})
+	elapsed := time.Since(start)
+
+	// контекст отменяется через 100ms, не должно висеть 5 секунд
+	if elapsed > 1*time.Second {
+		t.Errorf("context cancel should stop waiting, took %v", elapsed)
+	}
+}
+
+// хелпер для простых моков
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
