@@ -47,30 +47,63 @@ cd code
 make test
 ```
 
-## Пример вывода
+## Формат JSON-отчета
 
 ```json
 {
   "root_url": "https://example.com",
   "depth": 1,
-  "generated_at": "2026-04-07T12:00:00Z",
+  "generated_at": "2024-06-01T12:34:56Z",
   "pages": [
     {
       "url": "https://example.com",
       "depth": 0,
       "http_status": 200,
       "status": "ok",
+      "error": "",
       "seo": {
         "has_title": true,
-        "title": "Example Domain",
-        "has_description": false,
-        "description": "",
+        "title": "Example title",
+        "has_description": true,
+        "description": "Example description",
         "has_h1": true
       },
-      "broken_links": [],
-      "assets": [],
-      "discovered_at": "2026-04-07T12:00:00Z"
+      "broken_links": [
+        {
+          "url": "https://example.com/missing",
+          "status_code": 404,
+          "error": "Not Found"
+        }
+      ],
+      "assets": [
+        {
+          "url": "https://example.com/static/logo.png",
+          "type": "image",
+          "status_code": 200,
+          "size_bytes": 12345,
+          "error": ""
+        }
+      ],
+      "discovered_at": "2024-06-01T12:34:56Z"
     }
   ]
 }
 ```
+
+### Описание полей
+
+- `root_url` — стартовый URL обхода
+- `depth` — заданная глубина обхода
+- `generated_at` — время генерации отчета (ISO 8601)
+- `pages` — массив обойденных страниц
+  - `url` — адрес страницы
+  - `depth` — расстояние от стартового URL (0 = корень)
+  - `http_status` — HTTP статус ответа
+  - `status` — "ok" или "error"
+  - `error` — текст ошибки (пустая строка если нет)
+  - `seo` — SEO информация (title, description, h1)
+  - `broken_links` — ссылки с ошибками (4xx/5xx/сетевые)
+  - `assets` — статические ресурсы (image, script, style)
+  - `discovered_at` — время обнаружения страницы (ISO 8601)
+
+Флаг `IndentJSON` влияет только на форматирование, содержание не меняется.

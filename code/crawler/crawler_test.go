@@ -1004,6 +1004,136 @@ func TestAssetError404(t *testing.T) {
 	}
 }
 
+func TestJSONReportMatchesReference(t *testing.T) {
+	rootHTML := `<html>
+		<head>
+			<title>Example title</title>
+			<meta name="description" content="Example description">
+		</head>
+		<body>
+			<h1>Header</h1>
+			<a href="https://example.com/missing">broken</a>
+			<img src="https://example.com/static/logo.png">
+		</body>
+	</html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://example.com": {
+				status: 200, body: rootHTML,
+				headers: http.Header{"Content-Type": {"text/html"}},
+			},
+			"HEAD https://example.com/missing": {status: 404},
+			"HEAD https://example.com/static/logo.png": {
+				status: 200, setLength: true, contentLength: 12345,
+				headers: http.Header{"Content-Length": {"12345"}},
+			},
+		},
+	}
+
+	data, err := Analyze(context.Background(), Options{
+		URL: "https://example.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		IndentJSON: false, HTTPClient: &http.Client{Transport: mock},
+	})
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	var report Report
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+
+	// проверяем структуру
+	if report.RootURL != "https://example.com" {
+		t.Errorf("root_url = %s", report.RootURL)
+	}
+	if report.Depth != 1 {
+		t.Errorf("depth = %d", report.Depth)
+	}
+	if report.GeneratedAt.IsZero() {
+		t.Error("generated_at is zero")
+	}
+	if len(report.Pages) != 1 {
+		t.Fatalf("expected 1 page, got %d", len(report.Pages))
+	}
+
+	p := report.Pages[0]
+	if p.URL != "https://example.com" {
+		t.Errorf("page url = %s", p.URL)
+	}
+	if p.Depth != 0 {
+		t.Errorf("page depth = %d", p.Depth)
+	}
+	if p.HTTPStatus != 200 {
+		t.Errorf("http_status = %d", p.HTTPStatus)
+	}
+	if p.Status != "ok" {
+		t.Errorf("status = %s", p.Status)
+	}
+	if !p.SEO.HasTitle || p.SEO.Title != "Example title" {
+		t.Errorf("seo title: %+v", p.SEO)
+	}
+	if !p.SEO.HasDescription || p.SEO.Description != "Example description" {
+		t.Errorf("seo desc: %+v", p.SEO)
+	}
+	if !p.SEO.HasH1 {
+		t.Error("has_h1 should be true")
+	}
+	if len(p.BrokenLinks) != 1 || p.BrokenLinks[0].StatusCode != 404 {
+		t.Errorf("broken_links: %+v", p.BrokenLinks)
+	}
+	if len(p.Assets) != 1 {
+		t.Fatalf("expected 1 asset, got %d", len(p.Assets))
+	}
+	if p.Assets[0].Type != "image" || p.Assets[0].SizeBytes != 12345 {
+		t.Errorf("asset: %+v", p.Assets[0])
+	}
+	if p.DiscoveredAt.IsZero() {
+		t.Error("discovered_at is zero")
+	}
+}
+
+func TestIndentJSONOnlyChangesFormatting(t *testing.T) {
+	html := `<html><head><title>T</title></head><body></body></html>`
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {status: 200, body: html, headers: http.Header{"Content-Type": {"text/html"}}},
+		},
+	}
+	client := &http.Client{Transport: mock}
+
+	compact, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		IndentJSON: false, HTTPClient: client,
+	})
+
+	indented, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		IndentJSON: true, HTTPClient: client,
+	})
+
+	// формат разный
+	if string(compact) == string(indented) {
+		t.Error("compact and indented should differ in formatting")
+	}
+
+	// содержимое одинаковое (сравниваем без timestamps)
+	var r1, r2 Report
+	json.Unmarshal(compact, &r1)
+	json.Unmarshal(indented, &r2)
+
+	if r1.RootURL != r2.RootURL || r1.Depth != r2.Depth {
+		t.Error("content should be the same")
+	}
+	if len(r1.Pages) != len(r2.Pages) {
+		t.Error("page count should match")
+	}
+	if r1.Pages[0].SEO.Title != r2.Pages[0].SEO.Title {
+		t.Error("seo title should match")
+	}
+}
+
 // хелпер для простых моков
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
