@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -49,6 +50,7 @@ func (f *fetcher) doFetch(ctx context.Context, method, rawURL string) (*fetchRes
 	}
 
 	var lastErr error
+	var lastResult *fetchResult
 	attempts := f.retries + 1
 
 	for i := 0; i < attempts; i++ {
@@ -84,19 +86,27 @@ func (f *fetcher) doFetch(ctx context.Context, method, rawURL string) (*fetchRes
 			continue
 		}
 
-		cl := resp.ContentLength
-		if cl < 0 {
-			cl = int64(len(body))
-		}
-
-		return &fetchResult{
+		result := &fetchResult{
 			statusCode:    resp.StatusCode,
 			body:          body,
 			contentLength: resp.ContentLength,
 			header:        resp.Header.Clone(),
-		}, nil
+		}
+
+		// ретраим только временные ошибки (429, 5xx)
+		if shouldRetry(resp.StatusCode) && i < attempts-1 {
+			lastErr = fmt.Errorf("http %d", resp.StatusCode)
+			lastResult = result
+			continue
+		}
+
+		return result, nil
 	}
 
+	// если последний ответ был 429/5xx, вернем его (а не ошибку)
+	if lastResult != nil {
+		return lastResult, nil
+	}
 	if lastErr == nil {
 		lastErr = errors.New("request failed")
 	}
@@ -123,6 +133,10 @@ func (f *fetcher) throttle(ctx context.Context) error {
 	}
 	f.lastCall = time.Now()
 	return nil
+}
+
+func shouldRetry(status int) bool {
+	return status == http.StatusTooManyRequests || status >= 500
 }
 
 func readBody(r io.ReadCloser) ([]byte, error) {

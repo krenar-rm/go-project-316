@@ -700,6 +700,141 @@ func TestDelayContextCancel(t *testing.T) {
 	}
 }
 
+func TestRetryAllFailsReturnsError(t *testing.T) {
+	// retries=2, сервер все 3 раза отвечает 500 -> ошибка в отчете
+	var mu sync.Mutex
+	callCount := 0
+
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		callCount++
+		mu.Unlock()
+		return &http.Response{
+			StatusCode:    500,
+			Header:        http.Header{},
+			Body:          io.NopCloser(strings.NewReader("error")),
+			ContentLength: 5,
+			Request:       req,
+		}, nil
+	})
+
+	client := &http.Client{Transport: transport}
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Retries: 2, Timeout: 5 * time.Second,
+		Concurrency: 1, HTTPClient: client,
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+
+	page := report.Pages[0]
+	if page.HTTPStatus != 500 {
+		t.Errorf("expected status 500, got %d", page.HTTPStatus)
+	}
+	if page.Status != "error" {
+		t.Errorf("expected 'error', got '%s'", page.Status)
+	}
+
+	mu.Lock()
+	cnt := callCount
+	mu.Unlock()
+
+	// retries=2 -> максимум 3 попытки (1 + 2)
+	if cnt > 3 {
+		t.Errorf("expected at most 3 calls, got %d", cnt)
+	}
+}
+
+func TestRetrySuccessOnSecondAttempt(t *testing.T) {
+	// первый запрос 500, второй 200 -> успех
+	var mu sync.Mutex
+	callCount := 0
+
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		callCount++
+		n := callCount
+		mu.Unlock()
+
+		if n == 1 {
+			return &http.Response{
+				StatusCode:    500,
+				Header:        http.Header{},
+				Body:          io.NopCloser(strings.NewReader("fail")),
+				ContentLength: 4,
+				Request:       req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode:    200,
+			Header:        http.Header{"Content-Type": {"text/html"}},
+			Body:          io.NopCloser(strings.NewReader("<html><head><title>OK</title></head><body></body></html>")),
+			ContentLength: 55,
+			Request:       req,
+		}, nil
+	})
+
+	client := &http.Client{Transport: transport}
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Retries: 2, Timeout: 5 * time.Second,
+		Concurrency: 1, HTTPClient: client,
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+
+	page := report.Pages[0]
+	if page.HTTPStatus != 200 {
+		t.Errorf("expected 200 after retry, got %d", page.HTTPStatus)
+	}
+	if page.Status != "ok" {
+		t.Errorf("expected 'ok', got '%s'", page.Status)
+	}
+}
+
+func TestRetry429(t *testing.T) {
+	// 429 тоже должен ретраиться
+	var mu sync.Mutex
+	callCount := 0
+
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		mu.Lock()
+		callCount++
+		n := callCount
+		mu.Unlock()
+
+		if n == 1 {
+			return &http.Response{
+				StatusCode:    429,
+				Header:        http.Header{},
+				Body:          io.NopCloser(strings.NewReader("rate limited")),
+				ContentLength: 12,
+				Request:       req,
+			}, nil
+		}
+		return &http.Response{
+			StatusCode:    200,
+			Header:        http.Header{"Content-Type": {"text/html"}},
+			Body:          io.NopCloser(strings.NewReader("<html><body>ok</body></html>")),
+			ContentLength: 28,
+			Request:       req,
+		}, nil
+	})
+
+	client := &http.Client{Transport: transport}
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Retries: 1, Timeout: 5 * time.Second,
+		Concurrency: 1, HTTPClient: client,
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+
+	if report.Pages[0].HTTPStatus != 200 {
+		t.Errorf("expected 200 after 429 retry, got %d", report.Pages[0].HTTPStatus)
+	}
+}
+
 // хелпер для простых моков
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
