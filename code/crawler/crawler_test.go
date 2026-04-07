@@ -835,6 +835,175 @@ func TestRetry429(t *testing.T) {
 	}
 }
 
+func TestAssetsBasic(t *testing.T) {
+	html := `<html><body>
+		<img src="https://test.com/logo.png">
+		<script src="https://test.com/app.js"></script>
+		<link rel="stylesheet" href="https://test.com/style.css">
+	</body></html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {status: 200, body: html, headers: http.Header{"Content-Type": {"text/html"}}},
+			"HEAD https://test.com/logo.png": {
+				status: 200, setLength: true, contentLength: 5000,
+				headers: http.Header{"Content-Length": {"5000"}},
+			},
+			"HEAD https://test.com/app.js": {
+				status: 200, setLength: true, contentLength: 1024,
+				headers: http.Header{"Content-Length": {"1024"}},
+			},
+			"HEAD https://test.com/style.css": {
+				status: 200, setLength: true, contentLength: 512,
+				headers: http.Header{"Content-Length": {"512"}},
+			},
+		},
+	}
+
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: &http.Client{Transport: mock},
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+	assets := report.Pages[0].Assets
+
+	if len(assets) != 3 {
+		t.Fatalf("expected 3 assets, got %d", len(assets))
+	}
+
+	// проверяем типы
+	types := map[string]bool{}
+	for _, a := range assets {
+		types[a.Type] = true
+	}
+	for _, want := range []string{"image", "script", "style"} {
+		if !types[want] {
+			t.Errorf("missing asset type %q", want)
+		}
+	}
+}
+
+func TestAssetCacheDedup(t *testing.T) {
+	// два ассета с одинаковым URL на двух страницах - запрос только один
+	rootHTML := `<html><body>
+		<img src="https://test.com/shared.png">
+		<a href="https://test.com/page2">p2</a>
+	</body></html>`
+	page2HTML := `<html><body>
+		<img src="https://test.com/shared.png">
+	</body></html>`
+
+	var mu sync.Mutex
+	assetCalls := 0
+
+	transport := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		url := req.URL.String()
+		if strings.Contains(url, "shared.png") {
+			mu.Lock()
+			assetCalls++
+			mu.Unlock()
+			return &http.Response{
+				StatusCode:    200,
+				Header:        http.Header{"Content-Length": {"100"}},
+				Body:          io.NopCloser(strings.NewReader("")),
+				ContentLength: 100,
+				Request:       req,
+			}, nil
+		}
+		if url == "https://test.com" {
+			return &http.Response{
+				StatusCode: 200, Header: http.Header{"Content-Type": {"text/html"}},
+				Body: io.NopCloser(strings.NewReader(rootHTML)), ContentLength: int64(len(rootHTML)),
+				Request: req,
+			}, nil
+		}
+		if url == "https://test.com/page2" {
+			return &http.Response{
+				StatusCode: 200, Header: http.Header{"Content-Type": {"text/html"}},
+				Body: io.NopCloser(strings.NewReader(page2HTML)), ContentLength: int64(len(page2HTML)),
+				Request: req,
+			}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	})
+
+	Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 2, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: &http.Client{Transport: transport},
+	})
+
+	mu.Lock()
+	cnt := assetCalls
+	mu.Unlock()
+
+	if cnt != 1 {
+		t.Errorf("expected 1 request for shared asset, got %d", cnt)
+	}
+}
+
+func TestAssetNoContentLength(t *testing.T) {
+	html := `<html><body><img src="https://test.com/pic.png"></body></html>`
+	imgBody := "fakeimagecontent123"
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {status: 200, body: html, headers: http.Header{"Content-Type": {"text/html"}}},
+			// HEAD без Content-Length -> fallback на GET
+			"HEAD https://test.com/pic.png": {
+				status: 200, setLength: true, contentLength: -1,
+			},
+			"GET https://test.com/pic.png": {
+				status: 200, body: imgBody,
+			},
+		},
+	}
+
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: &http.Client{Transport: mock},
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+
+	if len(report.Pages[0].Assets) != 1 {
+		t.Fatalf("expected 1 asset, got %d", len(report.Pages[0].Assets))
+	}
+	asset := report.Pages[0].Assets[0]
+	if asset.SizeBytes != int64(len(imgBody)) {
+		t.Errorf("expected size %d, got %d", len(imgBody), asset.SizeBytes)
+	}
+}
+
+func TestAssetError404(t *testing.T) {
+	html := `<html><body><script src="https://test.com/missing.js"></script></body></html>`
+
+	mock := testTransport{
+		responses: map[string]testResponse{
+			"GET https://test.com": {status: 200, body: html, headers: http.Header{"Content-Type": {"text/html"}}},
+			"HEAD https://test.com/missing.js": {status: 404},
+		},
+	}
+
+	data, _ := Analyze(context.Background(), Options{
+		URL: "https://test.com", Depth: 1, Timeout: time.Second, Concurrency: 1,
+		HTTPClient: &http.Client{Transport: mock},
+	})
+
+	var report Report
+	json.Unmarshal(data, &report)
+
+	asset := report.Pages[0].Assets[0]
+	if asset.StatusCode != 404 {
+		t.Errorf("expected 404, got %d", asset.StatusCode)
+	}
+	if asset.Error == "" {
+		t.Error("expected error message for 404 asset")
+	}
+}
+
 // хелпер для простых моков
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
