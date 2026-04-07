@@ -221,8 +221,6 @@ func (c *crawlerState) processPage(ctx context.Context, job crawlJob) (PageRepor
 		URL:          job.url.String(),
 		Depth:        job.depth,
 		Status:       "ok",
-		BrokenLinks:  make([]BrokenLinkReport, 0),
-		Assets:       make([]AssetReport, 0),
 		DiscoveredAt: time.Now(),
 	}
 
@@ -232,6 +230,10 @@ func (c *crawlerState) processPage(ctx context.Context, job crawlJob) (PageRepor
 		page.Error = err.Error()
 		return page, nil
 	}
+
+	// инициализируем только после успешного запроса
+	page.BrokenLinks = make([]BrokenLinkReport, 0)
+	page.Assets = make([]AssetReport, 0)
 
 	page.HTTPStatus = res.statusCode
 	if res.statusCode >= 400 {
