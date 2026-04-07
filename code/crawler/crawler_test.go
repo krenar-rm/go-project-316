@@ -160,7 +160,7 @@ func TestAnalyze404Status(t *testing.T) {
 	}
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	page := report.Pages[0]
 	if page.HTTPStatus != 404 {
@@ -195,7 +195,7 @@ func TestAnalyze500Status(t *testing.T) {
 	}
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 	if report.Pages[0].HTTPStatus != 500 {
 		t.Errorf("expected 500, got %d", report.Pages[0].HTTPStatus)
 	}
@@ -230,7 +230,7 @@ func TestAnalyzeTimeout(t *testing.T) {
 	}
 	if data != nil {
 		var report Report
-		json.Unmarshal(data, &report)
+		if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 		// отчет может быть пустой или с ошибкой - оба варианта ок
 	}
 }
@@ -272,7 +272,7 @@ func TestAnalyzeBrokenLinks(t *testing.T) {
 	}
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	page := report.Pages[0]
 	if len(page.BrokenLinks) != 1 {
@@ -323,7 +323,7 @@ func TestAnalyzeIgnoresUnsupportedSchemes(t *testing.T) {
 	}
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	page := report.Pages[0]
 	if len(page.BrokenLinks) != 0 {
@@ -352,7 +352,7 @@ func TestSEOAllTagsPresent(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 	seo := report.Pages[0].SEO
 
 	if !seo.HasTitle {
@@ -387,7 +387,7 @@ func TestSEONoTags(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 	seo := report.Pages[0].SEO
 
 	if seo.HasTitle {
@@ -428,7 +428,7 @@ func TestSEOHtmlEntities(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 	seo := report.Pages[0].SEO
 
 	if seo.Title != "Tom & Jerry" {
@@ -461,7 +461,7 @@ func TestDepthLimitsPages(t *testing.T) {
 		HTTPClient: client,
 	})
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	if len(report.Pages) != 1 {
 		t.Fatalf("depth=1: expected 1 page, got %d", len(report.Pages))
@@ -476,7 +476,7 @@ func TestDepthLimitsPages(t *testing.T) {
 		HTTPClient: client,
 	})
 	var report2 Report
-	json.Unmarshal(data2, &report2)
+	if err := json.Unmarshal(data2, &report2); err != nil { t.Fatal(err) }
 
 	if len(report2.Pages) != 2 {
 		t.Fatalf("depth=2: expected 2 pages, got %d", len(report2.Pages))
@@ -504,7 +504,7 @@ func TestExternalPagesNotCrawled(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	for _, p := range report.Pages {
 		if p.URL == "https://external.com/page" {
@@ -545,7 +545,7 @@ func TestDuplicateLinksOnlyOnce(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	count := 0
 	for _, p := range report.Pages {
@@ -579,7 +579,7 @@ func TestRateLimitDelay(t *testing.T) {
 	client := &http.Client{Transport: transport}
 	delay := 50 * time.Millisecond
 
-	Analyze(context.Background(), Options{
+	_, _ = Analyze(context.Background(), Options{
 		URL: "https://test.com", Depth: 1, Delay: delay, Timeout: 2 * time.Second,
 		Concurrency: 1, HTTPClient: client,
 	})
@@ -622,7 +622,7 @@ func TestRateLimitRPSOverridesDelay(t *testing.T) {
 	rpsDelay := time.Duration(float64(time.Second) / 10) // 100ms
 
 	start := time.Now()
-	Analyze(context.Background(), Options{
+	_, _ = Analyze(context.Background(), Options{
 		URL: "https://test.com", Depth: 1, Delay: rpsDelay, Timeout: 5 * time.Second,
 		Concurrency: 1, HTTPClient: client,
 	})
@@ -661,7 +661,7 @@ func TestNoDelayNoSlowdown(t *testing.T) {
 	client := &http.Client{Transport: transport}
 
 	start := time.Now()
-	Analyze(context.Background(), Options{
+	_, _ = Analyze(context.Background(), Options{
 		URL: "https://test.com", Depth: 1, Delay: 0, Timeout: time.Second,
 		Concurrency: 1, HTTPClient: client,
 	})
@@ -688,7 +688,7 @@ func TestDelayContextCancel(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	Analyze(ctx, Options{
+	_, _ = Analyze(ctx, Options{
 		URL: "https://test.com", Depth: 1, Delay: 5 * time.Second, Timeout: 10 * time.Second,
 		Concurrency: 1, HTTPClient: &http.Client{Transport: transport},
 	})
@@ -725,7 +725,7 @@ func TestRetryAllFailsReturnsError(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	page := report.Pages[0]
 	if page.HTTPStatus != 500 {
@@ -781,7 +781,7 @@ func TestRetrySuccessOnSecondAttempt(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	page := report.Pages[0]
 	if page.HTTPStatus != 200 {
@@ -828,7 +828,7 @@ func TestRetry429(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	if report.Pages[0].HTTPStatus != 200 {
 		t.Errorf("expected 200 after 429 retry, got %d", report.Pages[0].HTTPStatus)
@@ -866,7 +866,7 @@ func TestAssetsBasic(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 	assets := report.Pages[0].Assets
 
 	if len(assets) != 3 {
@@ -929,7 +929,7 @@ func TestAssetCacheDedup(t *testing.T) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
 	})
 
-	Analyze(context.Background(), Options{
+	_, _ = Analyze(context.Background(), Options{
 		URL: "https://test.com", Depth: 2, Timeout: time.Second, Concurrency: 1,
 		HTTPClient: &http.Client{Transport: transport},
 	})
@@ -966,7 +966,7 @@ func TestAssetNoContentLength(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	if len(report.Pages[0].Assets) != 1 {
 		t.Fatalf("expected 1 asset, got %d", len(report.Pages[0].Assets))
@@ -993,7 +993,7 @@ func TestAssetError404(t *testing.T) {
 	})
 
 	var report Report
-	json.Unmarshal(data, &report)
+	if err := json.Unmarshal(data, &report); err != nil { t.Fatal(err) }
 
 	asset := report.Pages[0].Assets[0]
 	if asset.StatusCode != 404 {
@@ -1120,8 +1120,12 @@ func TestIndentJSONOnlyChangesFormatting(t *testing.T) {
 
 	// содержимое одинаковое (сравниваем без timestamps)
 	var r1, r2 Report
-	json.Unmarshal(compact, &r1)
-	json.Unmarshal(indented, &r2)
+	if err := json.Unmarshal(compact, &r1); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(indented, &r2); err != nil {
+		t.Fatal(err)
+	}
 
 	if r1.RootURL != r2.RootURL || r1.Depth != r2.Depth {
 		t.Error("content should be the same")
